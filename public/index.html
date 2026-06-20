@@ -6,22 +6,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Chat App</title>
     <style>
+        :root {
+            --draw-color: #000000;
+        }
+
+        body {
+            font-family: sans-serif;
+            margin: 20px;
+        }
+
         .chat {
             display: flex;
             flex-direction: column;
-            height: 80vh;
+            height: 40vh; /* キャンバスが見やすいように少し縮めました */
+            margin-bottom: 10px;
         }
 
         .messages {
             flex: 1;
             overflow-y: auto;
             list-style: none;
-            padding: 0;
+            padding: 10px;
             margin: 0;
+            border: 1px solid #eee;
+            background-color: #fafafa;
         }
 
         .form {
             display: flex;
+            margin-top: 5px;
         }
 
         .input {
@@ -31,27 +44,61 @@
         }
 
         .submit {
-            padding: 10px;
+            padding: 10px 20px;
             border: 1px solid #ccc;
             background: #eee;
             cursor: pointer;
+        }
+
+        /* カラーパレットのスタイル */
+        .color-palette {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .color-btn {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #ccc;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        
+        /* 選択中のボタンをハイライトするスタイル */
+        .color-btn.active {
+            border: 3px solid #ffcc00;
+            transform: scale(1.1);
+        }
+
+        #canvas {
+            cursor: crosshair;
         }
     </style>
 </head>
 
 <body>
+    <div class="color-palette">
+        <button class="color-btn active" data-color="#000000" style="background-color: #000000;"></button>
+        <button class="color-btn" data-color="#FF0000" style="background-color: #FF0000;"></button>
+        <button class="color-btn" data-color="#0000FF" style="background-color: #0000FF;"></button>
+        <button class="color-btn" data-color="#008000" style="background-color: #008000;"></button>
+    </div>
+
     <div class="chat">
         <ul class="messages"></ul>
         <form class="form">
-            <input class="input" autocomplete="off" />
+            <input class="input" autocomplete="off" placeholder="メッセージを入力..." />
             <button class="submit">Send</button>
         </form>
     </div>
-    <canvas id="canvas" width="600" height="600" style="border: solid 1px black"></canvas>
+    
+    <canvas id="canvas" width="600" height="400" style="border: solid 1px black"></canvas>
 
     <script>
         function main() {
             const host = location.origin.replace(/^http/, 'ws')
+            // ※ローカルでファイルを開いてテストする場合は、ws://localhost:ポート番号/ws などに書き換えてください
             const ws = new WebSocket(host + '/ws')
             const myId = self.crypto.randomUUID().substr(0, 8)
 
@@ -59,7 +106,22 @@
             const ctx = canvas.getContext('2d')
 
             let drawing = false
+            let currentColor = '#000000' // 現在選択されている色を保持する変数
 
+            // --- カラーパレットの制御 ---
+            const colorButtons = document.querySelectorAll('.color-btn')
+            colorButtons.forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    // 色を更新
+                    currentColor = e.target.dataset.color
+                    
+                    // 見た目の更新（選択中のボタンをハイライト）
+                    colorButtons.forEach(b => b.classList.remove('active'))
+                    e.target.classList.add('active')
+                })
+            })
+
+            // --- キャンバスの制御 ---
             canvas.addEventListener('mousedown', (e) => {
                 sendDrawingEvent(e.offsetX, e.offsetY, 'mousedown')
             })
@@ -103,16 +165,24 @@
                 }
             }
 
+            // 送信時に `color: currentColor` を追加
             function sendDrawingEvent(x, y, control) {
-                const message = JSON.stringify({ x, y, control, type: 'paint' })
+                const message = JSON.stringify({ x, y, control, color: currentColor, type: 'paint' })
                 ws.send(message)
             }
 
+            // --- 受信処理 ---
             ws.onmessage = (event) => {
                 const msg = JSON.parse(event.data)
+                
                 if (msg.type === 'paint') {
-                    const { x, y, control } = msg
-                    console.log({ control })
+                    const { x, y, control, color } = msg
+                    
+                    // 描画する直前に、送られてきた色をCanvasのコンテキストにセットする
+                    if (color) {
+                        ctx.strokeStyle = color
+                    }
+
                     if (control === 'mousedown') {
                         mousedown()
                     } else if (control === 'mouseup') {
@@ -123,26 +193,40 @@
                         mouseout()
                     }
                 }
+                
                 if (msg.type === 'chat') {
-                    const { id, text } = msg
+                    const { id, text, color } = msg
                     const messageList = document.querySelector('.messages')
                     const li = document.createElement('li')
+                    
+                    // テキストの色を適用
+                    if (color) {
+                        li.style.color = color
+                    }
+
                     if (id === myId) {
-                        li.textContent = `(${id})自分:` + text
+                        li.textContent = `(${id})自分: ` + text
                     } else {
                         li.textContent = id + ': ' + text
                     }
                     messageList.appendChild(li)
+                    
+                    // スクロールを一番下にする（おまけ）
+                    messageList.scrollTop = messageList.scrollHeight
                 }
             }
 
+            // --- フォーム送信処理 ---
             const form = document.querySelector('.form')
 
             form.onsubmit = function (e) {
                 e.preventDefault()
                 const input = document.querySelector('.input')
                 const text = input.value
-                ws.send(JSON.stringify({ id: myId, text, type: 'chat' }))
+                if (!text) return // 空送信を防止
+                
+                // チャット送信時にも `color: currentColor` を追加
+                ws.send(JSON.stringify({ id: myId, text, color: currentColor, type: 'chat' }))
                 input.value = ''
                 input.focus()
             }
